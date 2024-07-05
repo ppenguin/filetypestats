@@ -178,18 +178,41 @@ func (f *FileTypeStatsDB) FTDumpPaths(paths []string) (*[]types.FTypeStat, error
 }
 
 // FTStatsSum returns the summary FileTypeStats for the given paths as a map of FTypeStat per File Type
+// To facilitate aggregation over multiple SELECTs (to circumvent the max WHERE conditions issue for >1000)
+// The strategy becomes to concatenate SELECT results with UNION ALL into a CTE (Common Table Expression),
+// then re-select from the CTE and add the "totals" record with UNION
 func (f *FileTypeStatsDB) FTStatsSum(paths []string) (types.FileTypeStats, error) {
-	wp := f.pathsWherePredicate(paths)
+	const maxWhereCond = 1000
 	ftstats := make(types.FileTypeStats)
-	rs, err := f.DB.Query(fmt.Sprintf(
-		`SELECT cats.filecat AS fcat, fileinfo.path, COUNT(fileinfo.path) AS fcatcount, SUM(fileinfo.size) AS fcatsize FROM fileinfo, cats
-			WHERE fileinfo.catid=cats.id AND (%s)
-			GROUP BY cats.filecat
-		 UNION ALL
-		 SELECT 'total', '', COUNT(fileinfo.path), SUM(fileinfo.size) FROM cats, fileinfo
-		 	WHERE fileinfo.catid=cats.id AND (cats.filecat IS NOT 'dir') AND (%s)
-		 ORDER BY fileinfo.path
-			`, wp, wp))
+
+	var qryParts []string
+	for start := 0; start < len(paths); start += maxWhereCond {
+		end := start + maxWhereCond
+		if end > len(paths) {
+			end = len(paths)
+		}
+		wp := f.pathsWherePredicate(paths[start:end])
+		qryParts = append(
+			qryParts,
+			fmt.Sprintf(
+				`SELECT cats.filecat AS fcat, fileinfo.path, COUNT(fileinfo.path) AS fcatcount, SUM(fileinfo.size) AS fcatsize 
+                    FROM fileinfo, cats
+			        WHERE fileinfo.catid=cats.id AND (%s)
+			        GROUP BY cats.filecat`,
+				wp),
+		)
+	}
+
+	// wp := f.pathsWherePredicate(paths)
+	rs, err := f.DB.Query(fmt.Sprintf(`
+        WITH CatSum(fcat, path, fcatcount, fcatsize) AS (%s)
+        SELECT * from CatSum
+        UNION
+        SELECT 'total', '', SUM(CatSum.fcatcount), SUM(CatSum.fcatsize) FROM cats, CatSum
+		 	WHERE CatSum.fcat=cats.filecat
+		    ORDER BY CatSum.path`,
+		strings.Join(qryParts, ` UNION ALL `)))
+
 	if err != nil {
 		return ftstats, err
 	}
