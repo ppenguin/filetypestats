@@ -182,7 +182,7 @@ func (f *FileTypeStatsDB) FTDumpPaths(paths []string) (*[]types.FTypeStat, error
 // The strategy becomes to concatenate SELECT results with UNION ALL into a CTE (Common Table Expression),
 // then re-select from the CTE and add the "totals" record with UNION
 func (f *FileTypeStatsDB) FTStatsSum(paths []string) (types.FileTypeStats, error) {
-	const maxWhereCond = 1000
+	const maxWhereCond = 500 // the maximum is 1000, but the where predicate has 2 conditions for each path
 	ftstats := make(types.FileTypeStats)
 
 	var qryParts []string
@@ -195,22 +195,15 @@ func (f *FileTypeStatsDB) FTStatsSum(paths []string) (types.FileTypeStats, error
 		qryParts = append(
 			qryParts,
 			fmt.Sprintf(
-				`SELECT cats.filecat AS fcat, fileinfo.path, COUNT(fileinfo.path) AS fcatcount, SUM(fileinfo.size) AS fcatsize 
-                    FROM fileinfo, cats
-			        WHERE fileinfo.catid=cats.id AND (%s)
-			        GROUP BY cats.filecat`,
+				`SELECT cats.filecat AS fcat, fileinfo.path, COUNT(fileinfo.path) AS fcatcount, SUM(fileinfo.size) AS fcatsize FROM fileinfo, cats WHERE fileinfo.catid=cats.id AND (%s) GROUP BY cats.filecat`,
 				wp),
 		)
 	}
 
 	// wp := f.pathsWherePredicate(paths)
-	rs, err := f.DB.Query(fmt.Sprintf(`
-        WITH CatSum(fcat, path, fcatcount, fcatsize) AS (%s)
-        SELECT * from CatSum
-        UNION
-        SELECT 'total', '', SUM(CatSum.fcatcount), SUM(CatSum.fcatsize) FROM cats, CatSum
-		 	WHERE CatSum.fcat=cats.filecat
-		    ORDER BY CatSum.path`,
+	rs, err := f.DB.Query(fmt.Sprintf(
+		// `WITH CatSum(fcat, path, fcatcount, fcatsize) AS (%s) SELECT * from CatSum UNION SELECT 'total', '', SUM(CatSum.fcatcount), SUM(CatSum.fcatsize) FROM cats, CatSum WHERE CatSum.fcat=cats.filecat ORDER BY CatSum.path`,
+		`WITH CatSum(fcat, path, fcatcount, fcatsize) AS (%s) SELECT fcat, '' AS path, SUM(CatSum.fcatcount) AS fcatcount, SUM(CatSum.fcatsize) AS fcatsize FROM CatSum GROUP BY CatSum.fcat UNION SELECT 'total' AS fcat, '', SUM(CatSum.fcatcount), SUM(CatSum.fcatsize) FROM CatSum`,
 		strings.Join(qryParts, ` UNION ALL `)))
 
 	if err != nil {
