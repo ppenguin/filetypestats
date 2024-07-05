@@ -149,6 +149,8 @@ func (f *FileTypeStatsDB) createTables() error {
 // path="/my/file*" => count all files matching "/my/file*"
 
 // FTDumpPaths returns all paths and raw info selected by the paths argument
+// FIXME: this does not work (yet) of len(paths)>500, but this function is (should be!)
+// only used in the testcli, so not a real issue
 func (f *FileTypeStatsDB) FTDumpPaths(paths []string) (*[]types.FTypeStat, error) {
 	wp := f.pathsWherePredicate(paths)
 	fts := make([]types.FTypeStat, 0)
@@ -200,9 +202,7 @@ func (f *FileTypeStatsDB) FTStatsSum(paths []string) (types.FileTypeStats, error
 		)
 	}
 
-	// wp := f.pathsWherePredicate(paths)
 	rs, err := f.DB.Query(fmt.Sprintf(
-		// `WITH CatSum(fcat, path, fcatcount, fcatsize) AS (%s) SELECT * from CatSum UNION SELECT 'total', '', SUM(CatSum.fcatcount), SUM(CatSum.fcatsize) FROM cats, CatSum WHERE CatSum.fcat=cats.filecat ORDER BY CatSum.path`,
 		`WITH CatSum(fcat, path, fcatcount, fcatsize) AS (%s) SELECT fcat, '' AS path, SUM(CatSum.fcatcount) AS fcatcount, SUM(CatSum.fcatsize) AS fcatsize FROM CatSum GROUP BY CatSum.fcat UNION SELECT 'total' AS fcat, '', SUM(CatSum.fcatcount), SUM(CatSum.fcatsize) FROM CatSum`,
 		strings.Join(qryParts, ` UNION ALL `)))
 
